@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: deployment/Dockerfile
+    container_name: fake-engagement-api
+    ports:
+      - "8000:8000"
+    environment:
+      - MODEL_PATH=${MODEL_PATH:-models/baselines/random_forest.pkl}
+      - MODEL_TYPE=${MODEL_TYPE:-random_forest}
+      - CONFIG_PATH=${CONFIG_PATH:-config/config.yaml}
+      - PORT=8000
+      - HOST=0.0.0.0
+    volumes:
+      - ../models:/app/models
+      - ../config:/app/config
+      - ../data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
