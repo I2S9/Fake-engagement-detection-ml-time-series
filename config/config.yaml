@@ -1,0 +1,61 @@
+# Configuration file for fake engagement detection models
+
+# Data configuration
+data:
+  seq_len: 48  # sequence length in time steps (hours)
+  stride: 1   # stride for sequence creation
+  normalize: true
+  normalization_method: "standardize"  # standardize or minmax
+  normalize_per_series: false
+  test_size: 0.2
+  val_size: 0.1
+  batch_size: 32
+  num_workers: 0
+  pin_memory: false
+
+# LSTM model configuration
+lstm:
+  input_size: null  # will be set from data
+  hidden_size: 64
+  num_layers: 2
+  dropout: 0.2
+  bidirectional: false
+  num_classes: 2
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  num_epochs: 50
+  early_stopping_patience: 10
+
+# TCN model configuration
+tcn:
+  input_size: null  # will be set from data
+  num_channels: [64, 64, 64]  # number of channels in each layer
+  kernel_size: 3
+  dropout: 0.2
+  num_classes: 2
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  num_epochs: 50
+  early_stopping_patience: 10
+
+# Autoencoder model configuration
+autoencoder:
+  input_size: null  # will be set from data
+  seq_len: 48
+  encoder_hidden_sizes: [64, 32]  # hidden sizes for encoder
+  decoder_hidden_sizes: [32, 64]  # hidden sizes for decoder
+  latent_size: 16  # size of latent representation
+  dropout: 0.2
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  num_epochs: 50
+  early_stopping_patience: 10
+  anomaly_threshold: null  # will be set based on validation set
+
+# Training configuration
+training:
+  device: "cuda"  # cuda or cpu
+  random_seed: 42
+  save_best_model: true
+  model_save_dir: "models/sequential"
+
