@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Optional, Dict, Union, Tuple, List
 import os
 
-from src.models.baselines import BaselineModel
+from src.models.baselines import BaselineModel, create_baseline_model
 from src.models.lstm import create_lstm_model
 from src.models.tcn import create_tcn_model
 from src.models.autoencoder import create_autoencoder_model
@@ -45,7 +45,16 @@ def load_baseline_model(model_path: str) -> BaselineModel:
     if not os.path.exists(model_path):
         raise FileNotFoundError(f"Model file not found: {model_path}")
 
-    model = BaselineModel.__new__(BaselineModel)
+    # load model dict to get model_name
+    with open(model_path, "rb") as f:
+        model_dict = pickle.load(f)
+
+    model_name = model_dict.get("model_name")
+    if model_name is None:
+        raise ValueError("Model file does not contain model_name")
+
+    # create the correct model instance
+    model = create_baseline_model(model_name)
     model.load(model_path)
     return model
 
