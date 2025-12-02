@@ -72,20 +72,100 @@ def generate_normal_timeseries(
     decay_factor = np.exp(-time_index / (n_points * 0.3))
     trend = 1.0 + 0.5 * decay_factor
 
-    # add day/night cycle for hourly data
+    # add human natural cycles
     if frequency == "H":
         hour_of_day = np.array([d.hour for d in date_range])
-        day_night_cycle = 0.3 + 0.7 * (
-            1.0
-            + 0.4 * np.sin(2 * np.pi * (hour_of_day - 6) / 24)
-        )
-        day_night_cycle = np.clip(day_night_cycle, 0.2, 1.5)
-    else:
+        day_of_week = np.array([d.weekday() for d in date_range])
+        day_of_year = np.array([d.timetuple().tm_yday for d in date_range])
+        
+        # 1. Day/night cycle with realistic patterns (TikTok BRIC style)
+        # Night (0-6h): very low activity (0.15-0.35x) - people sleeping
+        # Morning (6-9h): gradual rise (0.4-0.8x) - waking up, commute
+        # Day (9-18h): moderate activity (0.7-1.1x) - work/school hours
+        # Evening peak (18-23h): highest activity (1.2-1.7x) - after work/school, leisure time
+        # Late night (23-0h): decreasing (0.5-0.7x) - winding down
+        
         day_night_cycle = np.ones(n_points)
-
-    # add weekend effect
-    is_weekend = np.array([d.weekday() >= 5 for d in date_range])
-    weekend_multiplier = np.where(is_weekend, 1.3, 1.0)
+        for i, hour in enumerate(hour_of_day):
+            if 0 <= hour < 6:
+                # Night: very low activity (baisse de nuit)
+                day_night_cycle[i] = 0.15 + 0.20 * np.random.random()
+            elif 6 <= hour < 9:
+                # Morning rise: gradual increase
+                progress = (hour - 6) / 3.0  # 0 to 1
+                day_night_cycle[i] = 0.4 + 0.4 * progress + 0.1 * np.random.random()
+            elif 9 <= hour < 18:
+                # Day activity: moderate (work/school hours)
+                day_night_cycle[i] = 0.7 + 0.4 * np.random.random()
+            elif 18 <= hour < 23:
+                # Evening peak: highest activity (pics après 18h)
+                base_peak = 1.2 + 0.3 * np.random.random()
+                # extra peak around 20-21h (prime time)
+                if 20 <= hour <= 21:
+                    base_peak += 0.2 + 0.1 * np.random.random()
+                day_night_cycle[i] = base_peak
+            else:  # 23 <= hour < 24
+                # Late night: decreasing
+                day_night_cycle[i] = 0.5 + 0.2 * np.random.random()
+        
+        day_night_cycle = np.clip(day_night_cycle, 0.1, 1.9)
+        
+        # 2. Weekly cycle (more pronounced)
+        # Monday: recovery from weekend, moderate (0.9-1.1x)
+        # Tuesday-Thursday: peak weekdays (1.0-1.2x)
+        # Friday: increase (1.1-1.3x)
+        # Saturday: highest (1.4-1.7x)
+        # Sunday: high but decreasing (1.2-1.5x)
+        
+        weekly_cycle = np.ones(n_points)
+        for i, weekday in enumerate(day_of_week):
+            if weekday == 0:  # Monday
+                weekly_cycle[i] = 0.9 + 0.2 * np.random.random()
+            elif weekday in [1, 2, 3]:  # Tuesday-Thursday
+                weekly_cycle[i] = 1.0 + 0.2 * np.random.random()
+            elif weekday == 4:  # Friday
+                weekly_cycle[i] = 1.1 + 0.2 * np.random.random()
+            elif weekday == 5:  # Saturday
+                weekly_cycle[i] = 1.4 + 0.3 * np.random.random()
+            else:  # Sunday
+                weekly_cycle[i] = 1.2 + 0.3 * np.random.random()
+        
+        # 3. Weekend effect (additional boost for weekends)
+        is_weekend = (day_of_week >= 5)
+        weekend_multiplier = np.where(is_weekend, 1.15, 1.0)
+        
+        # 4. Weak seasonality (annual cycle, subtle)
+        # Slight variations throughout the year
+        # Peak in summer (June-August) and holidays
+        seasonal_cycle = 1.0 + 0.1 * np.sin(2 * np.pi * (day_of_year - 80) / 365.25)
+        seasonal_cycle = np.clip(seasonal_cycle, 0.9, 1.1)
+        
+    else:
+        # For daily data, use simplified cycles
+        day_of_week = np.array([d.weekday() for d in date_range])
+        day_of_year = np.array([d.timetuple().tm_yday for d in date_range])
+        
+        # Weekly cycle for daily data
+        weekly_cycle = np.ones(n_points)
+        for i, weekday in enumerate(day_of_week):
+            if weekday == 0:  # Monday
+                weekly_cycle[i] = 0.9 + 0.2 * np.random.random()
+            elif weekday in [1, 2, 3]:  # Tuesday-Thursday
+                weekly_cycle[i] = 1.0 + 0.2 * np.random.random()
+            elif weekday == 4:  # Friday
+                weekly_cycle[i] = 1.1 + 0.2 * np.random.random()
+            elif weekday == 5:  # Saturday
+                weekly_cycle[i] = 1.4 + 0.3 * np.random.random()
+            else:  # Sunday
+                weekly_cycle[i] = 1.2 + 0.3 * np.random.random()
+        
+        day_night_cycle = np.ones(n_points)
+        is_weekend = (day_of_week >= 5)
+        weekend_multiplier = np.where(is_weekend, 1.15, 1.0)
+        
+        # Weak seasonality
+        seasonal_cycle = 1.0 + 0.1 * np.sin(2 * np.pi * (day_of_year - 80) / 365.25)
+        seasonal_cycle = np.clip(seasonal_cycle, 0.9, 1.1)
 
     # add random noise
     noise_views = np.random.normal(1.0, 0.15, n_points)
@@ -93,11 +173,11 @@ def generate_normal_timeseries(
     noise_comments = np.random.normal(1.0, 0.20, n_points)
     noise_shares = np.random.normal(1.0, 0.18, n_points)
 
-    # combine all effects
-    views_multiplier = trend * day_night_cycle * weekend_multiplier * noise_views
-    likes_multiplier = trend * day_night_cycle * weekend_multiplier * noise_likes
-    comments_multiplier = trend * day_night_cycle * weekend_multiplier * noise_comments
-    shares_multiplier = trend * day_night_cycle * weekend_multiplier * noise_shares
+    # combine all effects (human cycles + trend + noise)
+    views_multiplier = trend * day_night_cycle * weekly_cycle * weekend_multiplier * seasonal_cycle * noise_views
+    likes_multiplier = trend * day_night_cycle * weekly_cycle * weekend_multiplier * seasonal_cycle * noise_likes
+    comments_multiplier = trend * day_night_cycle * weekly_cycle * weekend_multiplier * seasonal_cycle * noise_comments
+    shares_multiplier = trend * day_night_cycle * weekly_cycle * weekend_multiplier * seasonal_cycle * noise_shares
 
     # generate metrics with realistic ratios
     views = np.maximum(0, base_views * views_multiplier).astype(int)
