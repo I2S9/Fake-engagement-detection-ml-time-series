@@ -187,6 +187,8 @@ def prepare_for_baseline_model(
     df: pd.DataFrame,
     feature_columns: Optional[List[str]] = None,
     id_column: str = "id",
+    expected_feature_names: Optional[List[str]] = None,
+    expected_n_features: Optional[int] = None,
 ) -> np.ndarray:
     """
     Prepare time series data for baseline model prediction.
@@ -199,6 +201,8 @@ def prepare_for_baseline_model(
         Feature columns to use. If None, extracts temporal features
     id_column : str
         Name of the ID column
+    expected_feature_names : list of str, optional
+        Expected feature names from training. If provided, ensures output has same features.
 
     Returns
     -------
@@ -206,14 +210,37 @@ def prepare_for_baseline_model(
         Feature array [n_samples, n_features]
     """
     if feature_columns is None:
-        # extract temporal features
+        # extract temporal features with same parameters as training
         features_df = extract_temporal_features(
             df,
             id_column=id_column,
+            window_sizes=[6, 12, 24],
+            autocorr_lags=[1, 6, 12, 24],
             aggregate_per_id=True,
         )
         feature_cols = [col for col in features_df.columns if col not in [id_column, "label"]]
+        
+        # if expected features are provided, align features
+        if expected_feature_names is not None:
+            # add missing features with zero values
+            missing_features = set(expected_feature_names) - set(feature_cols)
+            for feat in missing_features:
+                features_df[feat] = 0.0
+            
+            # reorder to match expected order
+            feature_cols = [f for f in expected_feature_names if f in features_df.columns]
+        
         X = features_df[feature_cols].values
+        
+        # if expected number of features is provided, ensure correct size
+        if expected_n_features is not None and X.shape[1] != expected_n_features:
+            if X.shape[1] < expected_n_features:
+                # pad with zeros
+                padding = np.zeros((X.shape[0], expected_n_features - X.shape[1]))
+                X = np.hstack([X, padding])
+            elif X.shape[1] > expected_n_features:
+                # truncate (shouldn't happen, but just in case)
+                X = X[:, :expected_n_features]
     else:
         # use provided features
         if id_column in df.columns:
@@ -418,10 +445,27 @@ class InferencePipeline:
 
         else:
             # prepare for baseline model
-            X = prepare_for_baseline_model(df_preprocessed, id_column=id_column)
+            # get expected number of features from the model's scaler
+            expected_n_features = getattr(self.model.scaler, 'n_features_in_', None)
+            X = prepare_for_baseline_model(
+                df_preprocessed, 
+                id_column=id_column,
+                expected_n_features=expected_n_features
+            )
 
             if len(X) == 0:
                 raise ValueError("No features extracted from time series.")
+
+            # ensure correct number of features
+            if expected_n_features is not None and X.shape[1] != expected_n_features:
+                # pad or truncate features to match expected size
+                if X.shape[1] < expected_n_features:
+                    # pad with zeros
+                    padding = np.zeros((X.shape[0], expected_n_features - X.shape[1]))
+                    X = np.hstack([X, padding])
+                else:
+                    # truncate (shouldn't happen, but just in case)
+                    X = X[:, :expected_n_features]
 
             # predict
             y_proba = self.model.predict_proba(X)
@@ -510,4 +554,148 @@ def predict_fake_probability(
     """
     pipeline = InferencePipeline(model_path, model_type, config, threshold)
     return pipeline.predict_fake_probability(time_series, id_column, timestamp_column)
+
+
+def predict_from_series(
+    series: List[float],
+    model_path: Optional[str] = None,
+    model_type: Optional[str] = None,
+    config: Optional[Dict] = None,
+    threshold: float = 0.5,
+    metric_name: str = "views",
+) -> Dict[str, Union[float, str]]:
+    """
+    Predict fake probability from a simple list of numeric values.
+
+    This function is designed for quick testing and manual inference.
+    It converts a list of values into a DataFrame and makes a prediction.
+
+    Parameters
+    ----------
+    series : list of float
+        List of numeric values representing a time series (e.g., views over time)
+    model_path : str, optional
+        Path to the saved model. If None, tries to find a default model.
+    model_type : str, optional
+        Type of model: 'baseline' or one of 'lstm', 'tcn', 'autoencoder'.
+        If None, tries to auto-detect from model_path.
+    config : dict, optional
+        Configuration dictionary (required for sequential models).
+        If None, loads from default config file.
+    threshold : float
+        Decision threshold for binary classification
+    metric_name : str
+        Name of the metric column (default: 'views').
+        The function will create views, likes, comments, shares based on this.
+
+    Returns
+    -------
+    dict
+        Dictionary with 'score' (probability), 'label' (normal/fake), and 'is_fake' (bool)
+
+    Examples
+    --------
+    >>> sample = [10, 15, 13, 14, 13, 200, 350, 400, 380, 12, 13]
+    >>> result = predict_from_series(sample)
+    >>> print(result)
+    {'score': 0.85, 'label': 'fake', 'is_fake': True}
+    """
+    from datetime import datetime, timedelta
+    from pathlib import Path
+    from src.utils.config import load_config
+
+    # convert series to DataFrame
+    n_points = len(series)
+    if n_points == 0:
+        raise ValueError("Series cannot be empty")
+
+    # create timestamps (hourly intervals)
+    start_time = datetime.now() - timedelta(hours=n_points)
+    timestamps = [start_time + timedelta(hours=i) for i in range(n_points)]
+
+    # create DataFrame with all engagement metrics
+    # for simplicity, we use the series values for views and derive other metrics
+    df = pd.DataFrame({
+        "id": ["test_series"] * n_points,
+        "timestamp": timestamps,
+        "views": series,
+        "likes": [int(v * 0.1) for v in series],  # approximate 10% like rate
+        "comments": [int(v * 0.02) for v in series],  # approximate 2% comment rate
+        "shares": [int(v * 0.01) for v in series],  # approximate 1% share rate
+    })
+
+    # auto-detect model if not provided
+    if model_path is None:
+        project_root = Path(__file__).resolve().parent.parent.parent
+        # try to find a default model
+        baseline_dir = project_root / "models" / "baselines"
+        sequential_dir = project_root / "models" / "sequential"
+
+        # prefer baseline models for simplicity
+        if baseline_dir.exists():
+            baseline_models = list(baseline_dir.glob("*.pkl"))
+            if baseline_models:
+                model_path = str(baseline_models[0])
+                if model_type is None:
+                    # try to infer from filename
+                    model_name = baseline_models[0].stem
+                    if "random_forest" in model_name:
+                        model_type = "random_forest"
+                    elif "logistic" in model_name:
+                        model_type = "logistic_regression"
+                    elif "isolation" in model_name:
+                        model_type = "isolation_forest"
+                    elif "lof" in model_name:
+                        model_type = "lof"
+                    else:
+                        model_type = "random_forest"  # default
+        elif sequential_dir.exists():
+            sequential_models = list(sequential_dir.glob("*_best.pth"))
+            if sequential_models:
+                model_path = str(sequential_models[0])
+                if model_type is None:
+                    model_name = sequential_models[0].stem
+                    if "lstm" in model_name:
+                        model_type = "lstm"
+                    elif "tcn" in model_name:
+                        model_type = "tcn"
+                    elif "autoencoder" in model_name:
+                        model_type = "autoencoder"
+                    else:
+                        model_type = "lstm"  # default
+
+        if model_path is None:
+            raise FileNotFoundError(
+                "No model found. Please train a model first or provide model_path."
+            )
+
+    # load config if not provided and needed
+    if config is None and model_type in ["lstm", "tcn", "autoencoder"]:
+        try:
+            config = load_config()
+        except FileNotFoundError:
+            raise FileNotFoundError(
+                "Config file required for sequential models. "
+                "Please provide config or ensure config/config.yaml exists."
+            )
+
+    # determine if model is baseline or sequential
+    # baseline models: logistic_regression, random_forest, isolation_forest, lof
+    # sequential models: lstm, tcn, autoencoder
+    if model_type in ["lstm", "tcn", "autoencoder"]:
+        # sequential model - config is required
+        if config is None:
+            config = load_config()
+    else:
+        # baseline model - no config needed
+        config = None
+
+    # make prediction
+    return predict_fake_probability(
+        df,
+        model_path=model_path,
+        model_type=model_type or "random_forest",
+        config=config,
+        threshold=threshold,
+    )
 
